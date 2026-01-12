@@ -1,5 +1,5 @@
 ---
-title: "andrew_boney_blog"
+title: "Andrew Boney Blog"
 listing:
   contents: posts
   feed: true
