@@ -2,16 +2,16 @@ project:
   type: website
 
 website:
-  description: "A blog built with Quarto"
-  site-url: https://your-website-url.example.com # you must change this appropriately for RSS feeds to work properly
-  title: "andrew_boney_blog"
+  description: "Personal blog for Andrew Boney"
+  site-url: https://andrewboney.github.io/andrew_boney_blog/
+  title: "Andrew Boney Blog"
   navbar:
     right:
       - about.qmd
       - icon: github
-        href: https://github.com/
+        href: https://github.com/andrewboney
       - icon: twitter
-        href: https://twitter.com
+        href: https://twitter.com/barry_bones_
 format:
   html:
     theme:
