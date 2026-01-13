@@ -1,0 +1,1692 @@
+LeJEPA: Provable and Scalable
+Self-Supervised Learning Without the Heuristics
+Randall Balestriero1,2,* Yann LeCun3,2,*
+1Brown University3New York University (NYU)2Meta-FAIR
+*Equal contribution
+Learning manipulable representations of the world and its dynamics is central to AI. Joint-Embedding
+Predictive Architectures (JEPAs) offer a promising blueprint, but lack of practical guidance and theory has led to
+ad-hoc R&D. We present a comprehensive theory of JEPAs and instantiate it inLeJEPA, a lean, scalable, and
+theoretically grounded training objective. First, we identify the isotropic Gaussian as the optimal distribution
+thatJEPAs’embeddingsshouldfollowtominimizedownstreampredictionrisk. Second,weintroduceanovel
+objective–Sketched Isotropic Gaussian Regularization(SIGReg)–to constrain embeddings to reach that ideal
+distribution. Combining the JEPA predictive loss with SIGReg yields LeJEPA with numerous theoretical and
+practical benefits: (i) single trade -off hyperparameter, (ii) linear time and memory complexity, (iii) stability across
+hyper-parameters, architectures (ResNets, ViTs, ConvNets) and domains, (iv) heuristics-free, e.g., no stop -gradient,
+noteacher–student,nohyper-parameterschedulers,and(v)distributedtraining-friendlyimplementationrequiring
+only≈50 lines of code. Our empirical validation covers 10+ datasets, 60+ architectures, all with varying scales and
+domains. As an example, using imagenet-1k for pretraining and linear evaluation with frozen backbone, LeJEPA
+reaches 79% with a ViT-H/14. We hope that the simplicity and theory-friendly ecosystem offered by LeJEPA will
+reestablish self-supervised pre-training as a core pillar of AI research (GitHub repo).
+0 20 40 60
+Test acc. (%)100101Train loss (log-scale)Spearman corr.: 94.52% (ViT/base-8 inet1k)
+λ
+0.04
+0.08
+0.12
+0.16
+0.20
+0 14 28 43 57 72
+Epoch02468Loss
+0204060
+Accuracy (%)ViT-g/14, ImageNet-1K, LeJEPA
+Full FT Frozen
+Method 1-sh Full 1-sh Full
+LeJEPA (in-domain)
+ConvNeXt-V2 Nano29.4282.72 28.74 76.52
+ResNet-34 24.2783.28 31.08 78.17
+Frontier (transfer)
+DINOv2 ViT-S/16 21.05 78.34 27.68 67.62
+DINOv3 ViT-S/16 24.71 81.60 30.17 71.38
+Figure 1.LeJEPA overview. Top-left:Training loss exhibits strong correlation with downstream linear probe performance on ImageNet-1k
+(ViT-base),providingthefirstpracticallossformodelselectionwithoutsupervisedprobing.Top-right:Trainingstabilitywithoutheuristics
+even on 1.8B ViT-g models, stable training loss.Bottom-left:PCA features from ImageNet-1k pretrained LeJEPA ViT-Large demonstrate clear
+semantic relationships.Bottom-right:Galaxy10 in-domain results showcasing LeJEPA’s in-domain pretraining consistently outperforms
+state-of-the-art frontier foundation models transfer learning (DINOv2/v3 trained on natural images) across data regimes from 1-shot to full
+supervision. Thisdemonstratesthatdomain-specificSSLbeatsgenerictransferlearning,evenagainstmassive-scalefrontiermodels,whenthe
+framework scales effortlessly to any domain, model, and data scale.arXiv:2511.08544v3  [cs.LG]  14 Nov 2025
+
+LeJEPA:
+Sec 1: Intro| Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA | Sec 6: Experiments
+1 Introduction
+Learning manipulable representations of the world and
+its dynamics is a long -standing question in AI, with roots
+datingbackcenturiesago[VonHelmholtz,1867,Tolman,
+1948, Gregory, 1980, Sutton, 1991, Friston, 2010]. Across
+domains, e.g.,image recognition, robotics,physics, space
+exploration,theunifyingquestionishowtolearnanorga-
+nized and actionable high -dimensional embedding space from
+observations?UsingDeepNetworks–parameterizednon-
+linear operators 𝑓𝜽–to map observations to embeddings
+isastandardfirstpieceofthatpuzzle[LeCunetal.,2015,
+Goodfellow et al., 2016]. The second, less standardized,
+piece of that puzzle ishow to train 𝑓𝜽. Joint-Embedding
+Predictive Architectures (JEPAs) suggest training 𝑓𝜽by
+maximizing predictive agreement between the embed-
+dings of semantically relatedviews[Bromley et al., 1993,
+LeCun, 2022, Balestriero et al., 2023]. Views can come
+in two forms: transformations or corruptions. They can
+involvemasking,cropping,blurring,temporalorspatial
+translations, geometric or photometric transformations,
+viewpoint changes, views from different sensor modali-
+ties,etc. Thesupervisedformsinvolvehuman-produced
+components suchas image-captionpairs, text-code pairs,
+etc [Tian et al., 2020]. In any case, views are expected
+to share some degree of semantic relationship to allow
+thepredictiontasktoalign 𝑓𝜽’sembeddingstowardsthe
+underlying knowledge present in the data.
+Alas, JEPA’s prediction task admits failure modes, such
+as representation collapse, where 𝑓𝜽maps all inputs to
+nearly identical embeddings (complete collapse) or to a low-
+dimensional subspace (dimensional collapse) [Jing et al.,
+2021][Jing et al., 2021, Cosentino et al., 2022, Balestriero
+and LeCun, 2022]. To mitigate such shortcut solutions,
+state-of-the-art recipes rely on heuristics–stop -gradient
+[Chen et al., 2020a], asymmetric view generation [Wang
+etal.,2022],teacher–studentnetworkswithcarefullytuned
+EMA schedules [Caron et al., 2021, Tian et al., 2021], ex-
+plicit normalizationand whitening layers [Ermolovet al.,
+2021, Chen et al., 2021]–and a delicate balance of hyperpa-
+rameters. Asaresult,today’sJEPAtrainingisbrittleand
+most research has shifted toward scaling data [Vo et al.,
+2024], models [Fan et al., 2025] and even post-training Ro-
+das et al. [2025] while leaving the theoretical foundations
+of JEPAs largely unexplored.
+Our study proposes to break that cycle by question-
+ing some of the fundamental design principles under-
+pinning JEPAs. That introspection will start by asking
+what are the necessary conditions that JEPAs should abide
+by?Those minimal conditions will then act asaxioms
+for us to design a novel and lean JEPA. We identify two
+axioms: (i) solving the prediction task while (ii) enforc-
+ingan isotropicGaussiandistribution ofthe embeddings(Section3). While(i)followsstandardpractice[Balestriero
+and LeCun, 2022], we introduce in Section 4 a novel dis-
+tribution matching objective–Sketched Isotropic Gaussian
+Regularization(SIGReg)–toenforce(ii). TheuseofSIGReg
+not only removes the need for the numerous heuristics
+previouslyemployedtopreventrepresentationcollapse,
+butSIGRegalsoexhibitsfavorablescalingpropertiesasits
+memoryandcomputationalcomplexityislinearindimension
+and sample size. Crucially, SIGReg’s isotropic Gaussian
+enforcement solves the collapsed shortcut solution and
+provably minimizes the model’s expected risk over the
+spaceofdownstreamtaskstobeencounteredpost-training.
+TheresultingJEPAsolution–coinedLatent-EuclideanJEPA
+(LeJEPA)–is introduced in Section 5. Beyond theoretical
+optimality, LeJEPA offers numerous benefits such as (i)
+provable statistical guarantees, (ii) removal of heuristics
+such as teacher-student networks, (iii) linear memory and
+computational complexity, and most importantly (iv) a
+unifieddesignwithasingletrade-offparameterthatworks
+outoftheboxacrossdatasets,architecturesandscales(see
+Section 6). We summarize our contributions below.
+Contribution 1: We prove the optimal embedding
+distribution for foundation models.We establish that
+theisotropicGaussianuniquelyminimizesdownstream
+prediction risk across broad task families. In Section 3, we
+derive this result rigorously for both linear (Section 3.1)
+and nonlinear probes (Section 3.2), providing the first
+principledanswertowhatdistribution 𝑓𝜽’sembeddings
+should follow. This theoretical result transforms JEPA
+designfromheuristicexplorationtotargetedoptimization.
+Contribution 2: We introduce SIGReg, a distribution
+matching objective that uniquely combines provable
+correctness with computational efficiency at scale.We
+presentSketched Isotropic Gaussian Regularization(SIGReg),
+a novel objective that enforces distributional alignment
+via random projections and characteristic-function match-
+ing (Section 4 and Figure 2). SIGReg provides statistical
+guarantees (Sections 4.1 and 4.2) while achieving linear
+complexityandboundedgradients—acombinationthat
+existing distribution matching methods do not offer. Criti-
+cally, its projection-based construction defeats the curse
+of dimensionality (Section 4.3), making it both theoreti-
+callysound and practically efficientfor high-dimensional
+embeddings.
+Contribution3: WedesignLeJEPA,astatisticallyop-
+timalJEPA that eliminatescollapse byconstruction.By
+combining JEPA’s predictive objective with SIGReg target-
+ing the isotropic Gaussian, weintroduceLeJEPA—Latent-
+Euclidean JEPA (Section 5). LeJEPA requires only a single
+hyperparameter,eliminatesrepresentationalcollapsewith-
+out stop-gradients or teacher-student architectures, and
+transfers across architectures and datasets without hy-
+perparametertuning. Thisdemonstratesthatprincipled
+2
+
+LeJEPA:
+Sec 1: Intro |Sec 2: Background| Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA | Sec 6: Experiments
+𝑓𝜽
+→
+Figure 2.Sketched Isotropic Gaussian Regularization (SIGReg):Given some arbitrary input data with density 𝑝𝑥with support that may or may
+notlieonamanifold(left),aDeepnetwork(DN)encoder( 𝑓𝜽)producesembeddings 𝒛=𝑓 𝜽(𝒙)withsomedistribution 𝒛∼𝑝𝑧(middle). Ourproposed
+BackwardCramér-WoldStatistics(Section4)objectivepushes 𝑝𝑧tomatchatargetdistribution 𝑝𝑡byprojectingtheembeddingsalong 1𝑑directions
+(middle,arrows)andenforcingthattheunivariatedensities(right,coloredlines)matchthedistributionof 𝑝𝑡,projectedalongthesamedirections.
+Any popular statistical test (provided in Section 4.2) can assess the goodness-of-fit–in practice we argue for characteristic function tests (Section 4.2).
+ByusingSIGRegwith 𝑝𝑡isotropicGaussian(right,blacklines),weintroducealeanandprovablyoptimal(Section3)JEPA,coinedLeJEPA,freeof
+numerous heuristics and able to produce competitive performances (Sections 5 and 6).
+theory directly yields practical simplicity.
+Contribution 4: We validate LeJEPA at scale across
+diversearchitecturesandestablishin-domainpretrain-
+ing as viable.Our experiments (Section 6) span ViTs,
+ConvNeXts, ResNets, MaxViTs, and Swin Transformers
+at scales approaching 1 billion parameters, where LeJEPA
+matchesorexceedsstate-of-the-artmethodswhilemain-
+tainingtrainingsimplicityandrobustness. Critically,on
+domain-specific datasets (Galaxy10, Food101), LeJEPA
+outperformsDINOv2-basedtransferlearningwhenpre-
+traineddirectlyontargetdata. Thischallengesthetransfer
+learning paradigm and demonstrates that principled SSL
+can unlock effective in-domain pretraining—previously
+considered impractical for small datasets.
+2 Background and Notations
+Westartbyintroducingsomeofthenotationswewillbe
+usingthroughoutourmanuscript(Section2.1),followed
+byareviewofJEPAs(Section2.2),andexistingliterature
+studying their design (Section 2.3).
+2.1 Notations and Definitions
+Data.Weareinpossessionofadatasetofshape (𝑁,𝑉,𝐷)∈
+N∗3where𝑁is the number of samples, 𝑉is the number
+of views, and 𝐷is the dimension. One entry of this
+dataset is accessed via 𝒙𝑛,𝑣,𝑑. Those dimensions are often
+interpreted as follows: (N) is the number of independent
+samples, e.g., different images or different videos, (V) is
+the number ofviews, e.g., data-augmentations for images,
+frames for videos, and (D) is the dimension of each 𝒙𝑛,𝑣,
+e.g., number of RGB pixels for images. In many cases
+the ordering over 𝑉is given bytime–but in some cases,
+e.g., data-augmentation of an image, ordering becomesirrelevant. Our study does not require any particular
+choice to organize one’s dataset into a (𝑁,𝑉,𝐷) tensor–
+andnoneofourtheoryandimplementationassumesaparticular
+design decision for that tensor. However, we will rely on
+thefollowingtwoproperties,(independence)thesamples
+𝒙𝑛,𝒙𝑛′have been obtained independently from each other
+∀𝑛≠𝑛′,and(identicallydistributed)thesamplingprocess
+was identical among𝒙 𝑛,∀𝑛.
+Deep Networks.Today’s AI solutions rely onDeep
+(Neural)Networks(DNs),whicharecompositionsofalarge
+number of parameterized linear and nonlinear operators.
+We denote the DN’s mapping as 𝑓𝜽:R𝐷→R𝐾with𝐾
+the dimension of the embedding space. The internals
+of𝑓𝜽are designed by the researcher to incorporate as
+much prior knowledge about the data as possible. The
+details of𝑓𝜽are irrelevant to our study–as we will see
+the proposed LeJEPA works out-of-the-box on any 𝑓𝜽.
+In any case, all thelearnable parametersare gathered in
+the vector 𝜽∈R𝑃, with𝑃counting the total number of
+parameters. AcentralchallengeinAIresearchistodesign
+theright architectureandtrainingobjectivesothat 𝜽can
+be learned from gradient descent to ultimately produce a
+useful system, or foundation model,𝑓 𝜽.
+JEPAs.A foundation model is any system, e.g., a DN,
+able to solve numerous downstream tasks without requir-
+inganychangeinitsinternalparameters 𝜽. Thisisinsharp
+contrastwithasupervisedmodelthatonlyconsidersits
+training task. JEPAs have formally been introduced by
+LeCun[2022]asavehicletoproducefoundationmodels.
+The core building blocks of JEPAs rely on numerous well-
+establishedtechniquessuchassiamesenetworks[Bromley
+etal.,1993]andpredictivecoding[Helmholtzetal.,1867,
+BrunerandPostman,1949]. Whiletheexactblueprintof
+3
+
+LeJEPA:
+Sec 1: Intro |Sec 2: Background| Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA | Sec 6: Experiments
+Definition 1: JEPA
+JEPA(𝒙) ⇐⇒Enc 
+𝒙𝑛,𝑡+1,.
+is predictable fromEnc 
+𝒙𝑛,𝑡,.
+,∀𝑛,𝑡andEnc 
+𝒙.,.,.
+is not degenerate.(1)
+JEPAs varies greatly between use-cases, they all rely on
+two core principles: (i) being able to predict the embed-
+dingofaview 𝒙𝑛,𝑣fromtheembeddingofanotherview
+𝒙𝑛,𝑣′,𝑣′≠𝑣, all while (ii) ensuring that the embeddings
+do not become degenerate. Concretely, once a JEPA is
+designed and trained, it should be able to solve numer-
+ous downstream tasks in zero or few shots. The JEPA
+objective function, along with some examples for 𝒙, is
+providedinEquation(1). Thepredictabilitycriterioncanbe
+done by directly comparing the embeddings of the partial
+views𝐸𝑛𝑐(𝒙𝑛,𝑣,.)and𝐸𝑛𝑐(𝒙𝑛,𝑣′,.)with a metric, e.g., ℓ𝑝. In
+some cases, an additional DN coinedPred, is employed
+to compare 𝑃𝑟𝑒𝑑(𝐸𝑛𝑐(𝒙 𝑛,𝑣,.))against𝐸𝑛𝑐(𝒙𝑛,𝑣′,.)–which is
+only justified when there exists an asymmetry between
+the information content of the different views, e.g., by
+conditioning the predictions on observed actions from
+robotics data [Khazatsky et al., 2024].
+2.2 The Need for Reliable Pretraining
+The JEPA’s prediction task is designed based on a priori
+knowledge of the data. Its design is often quite natural
+since it is relatively intuitive to form 𝒙so that its views
+sharetherelevantinformationcontentonehopetocapture.
+On the other hand, the design of the “anti-collapse” crite-
+rion is much closer to a game of Whac-A-Mole. Today’s
+designsrelyonmanydifferentunder-specifiedsafeguards
+which are carefully combined in the hope that degener-
+ateshortcutsolutionsareavoidedduringtraining. Such
+mechanisms include (i) feature whitening [Ermolov et al.,
+2021, Bardes et al., 2021], (ii) negative samples [Chen
+et al., 2020a, He et al., 2020], and (iii) asymmetric views
+andteacher-studentnetworkswithstop-gradient[Caron
+et al., 2021, Assran et al., 2023]. Those mechanisms all
+suffer from at least two of the following limitations: (i)under-specification, i.e., the criteria can be minimized
+while embeddings are in a degenerate configuration, (ii)
+quadratictimeandmemorycomplexitywithmini-batch
+size and/or embedding dimension, (iii) sensitivity to data
+distribution,hyperparameters,architecture,and(iv)lack
+of theoretical understanding and guarantees.
+2.3 The Need for Actionable Theory
+For decades, the two major solutions for AI were super-
+visedlearning[LeCunetal.,2015]andlearningbyrecon-
+struction [Rumelhart et al., 1986]–sometimes combined
+together, e.g., for semi-supervised learning [Kingma et al.,
+2014]. Insupervisedlearning,thelabelsbothensurethat
+semantically similar samples are close to each other in em-
+beddingspacewhilepreventingcompleterepresentation
+collapse. Inparticular,itispossibletomeasuretheamount
+ofcollapseinsupervisedlearningasafunctionofthenum-
+ber of classes [Papyan et al., 2020]. The reconstruction
+objective is similarly well suited to prevent representation
+collapseastheoriginalinputmustberecoveredfromthe
+embeddings, i.e., the embeddings must be as informative
+abouttheinputaspossible–uptosomeoptionaldenoising
+tasks that users can setup as part of the training [Vincent
+et al., 2010].
+Because supervised and reconstruction-based learning
+have been widely studied for decades, there exists a large
+bodyofworktoexplainandinformpracticaldesigns–as
+wellasstudyingtheirlimitationsinproducingfoundation
+models [Balestriero and LeCun, 2024, Van Assel et al.,
+2025]. This is not the case for the more recent JEPAs
+where empirical advances quickly outpace anyone hoping
+todelveintotheirinnerworkings. Thisdynamicledthe
+community to focus on post-hoc theoretical justification
+of already found solutions [Liu et al., 2021, Shwartz Ziv
+4
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background |Sec 3: Why Gaussian?| Sec 4: SIGReg | Sec 5: LeJEPA | Sec 6: Experiments
+and LeCun, 2024, Shwartz-Ziv et al., 2022, Zhang et al.,
+2023]. In most cases, those studies involve theMutual
+Information(MI)[Shannon,1948,Cover,1999]whosedif-
+ferentboundsrecoverestablishedmethods[Gutmannand
+Hyvärinen,2010,MaandCollins,2018,Oordetal.,2018,
+Pooleetal.,2019,Hjelmetal.,2018,McAllesterandStratos,
+2020]. Because existing studies focus on explaining and
+interpreting alreadydeveloped JEPAs, toolittle principled
+guidance and innovation has been brought forward. In-
+stead, most of the recent empirical advances take the form
+ofcollectinglargerdataset,scalinguppre-existingtraining
+recipes [Goyal et al., 2019, Chen et al., 2020b, Oquab et al.,
+2023, Fan et al., 2025], and deriving novel data curation
+processes [Vo et al., 2024, Kerdreux et al., 2025].
+Incontrast,ourgoalinthefollowingSections3to5will
+betoderiveanovelJEPAsolutionfromfirstprinciples,i.e.,
+whose design relies on proved necessary conditions for
+optimality,andwithapretrainingrecipethatcanfinally
+reconcileexploratoryresearch,scalability,andstate-of-the-
+art performances.
+3 Latent Euclidean: Embeddings
+Should be Isotropic Gaussian
+We address a fundamental question:which distribution
+should Enc(𝒙)followtominimizeempiricalriskonanydown-
+stream task?We prove that the isotropic Gaussian is the
+unique optimal distribution for both linear (Section 3.1)
+and nonlinear probing (Section 3.2), with geometric in-
+tuition provided in Section 3.3. This theoretical result
+establishes the necessary design principle for our JEPA;
+Section 4 then provides the practical implementation to
+achieve it.
+3.1 Linear Probing
+Webeginbyidentifyingtheoptimaldistributionfor 𝑓𝜽’s
+embeddingsbyanalyzinglinearprobes–oneofthemost
+popular methods for frozen encoder evaluation. Specif-
+ically, we ask:which distribution for 𝑓𝜽(𝒙)would be most
+favorable for solving arbitrary downstream tasks, i.e., for any
+realization of targets𝒚?
+Denote as 𝒁∈R𝑁×𝐾the matrix of 𝑁embeddings, each
+𝐾-dimensional, from 𝑓𝜽(𝒙𝑛). Theunknowncorresponding
+labelsaredenotedas 𝒚∈R𝑁. Withoutlossofgenerality,we
+consider univariate targets; the following analysis extends
+to multivariate targets. The linear probe minimizes the
+following least square problem [Bishop and Nasrabadi,
+2006]
+ˆ𝛽=arg min
+𝛽∈R𝐾∥𝒚−𝒁𝛽∥2
+2+𝜆∥𝛽∥2
+2,(OLS)
+whereˆ𝛽is the optimal probe parameters, and 𝜆≥0
+is an hyperparameter controlling the Tikhonov regular-
+izer strength [Bishop, 1995, Golub et al., 1999]. Despitenot knowing 𝒚, it is possible to describe the bias and
+variance of the estimator ˆ𝛽as a function of the distri-
+bution of 𝒁. Consider two embeddings with identical
+columnspans 𝒁aniso,𝒁iso.𝒁aniso’scovariancematrixeigen-
+values are given by {𝜆𝑘}𝐾
+𝑘=1with at least two distinct
+values,while 𝒁iso’scovariancematrixeigenvaluesareall
+equalto1
+𝐾Í𝐾
+𝑘=1𝜆𝑘. Hence,thetwocandidateembeddings
+𝒁aniso,𝒁isocapture the same intrinsic features and have
+same energy, but different geometries.
+Lemma 1: Anisotropy amplifies bias
+Whenever 𝜆𝐾> 𝜆 1, there always exists a downstream task
+(𝒚) for which 𝒁anisoproduces a higher bias estimator than
+𝒁isofor𝜆 >0. (Proof in Section B.1.)
+Lemma 2: Anisotropy amplifies variance
+With𝜆=0,thetotalvarianceof ˆ𝛽(OLS)isminimizedfor 𝒁iso
+with tr(Var(ˆ𝜷aniso))>tr(Var(ˆ𝜷iso)). (Proof in Section B.2.)
+From the above lemmas. 1 and 2 we obtain that the
+distributionoffeaturesmustbeisotropic. Wenowmove
+to nonlinear probing where the standard Gaussian will
+emerge as the unique optimum.
+3.2 Nonlinear Probing
+To allow for more flexible evaluation of the pretrained
+encoder𝑓𝜽,ithasbecomeincreasinglycommontowork
+with a nonlinear probe. We analyze two widely-used
+nonlinearmethods: radius-basedk-NN[Taunketal.,2019,
+SunandHuang,2010,Zhangetal.,2017,AbuAlfeilatetal.,
+2019] for its simplicity and kernel methods [Nadaraya,
+1964, Watson, 1964] for their theoretical tractability.
+AsinSection3.1,weaskourselveswhichdistributionof
+embeddings wouldbe preferablefor a foundationmodel.
+We first define our prediction function. The training data
+consists of the 𝑁embeddings along with their training
+labels{(𝒛𝑛,𝒚𝑛)}𝑁
+𝑛=1. The prediction, using radius-based
+k-NN for a query vector𝒒is formed as
+b𝒚(𝒒):=1
+|𝒩𝑟0(𝒒)|Õ
+𝑛∈𝒩𝑟0(𝒒)𝒚𝑛,(kNN)
+where𝒩𝑟0(𝒒)={𝑛:∥𝒛 𝑛−𝒒∥≤𝑟 0}. The specific choice
+of radius𝑟0controls how many neighbors predictions are
+averaged to form the query’s prediction. The kernel’s
+prediction at a query𝒒∈R𝐾is given by
+b𝒚(𝒒)≜Í𝑁
+𝑛=1𝐾ℎ(𝒒−𝒛𝑛)𝒚𝑛Í𝑁
+𝑛=1𝐾ℎ(𝒒−𝒛𝑛).(Kernel)
+WesearchoveralldistributionsofZsubjecttoafixedto-
+talvarianceconstraint,e.g., Tr(Cov(𝒁))=𝜅 1or∥Cov(𝒁)∥ 𝐹=
+𝜅2. The specificvalueof 𝜅doesnot affectthe optimaldis-
+5
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? |Sec 4: SIGReg| Sec 5: LeJEPA | Sec 6: Experiments
+−4−2 0 2 4
+x1−4−2024x2Isotropic, Var( ˆβ) = 0.0056
+True boundary
+Learned boundaries
+−4−2 0 2 4
+x1Condition #: 20Anisotropic, Var( ˆβ) = 0.0801
+True boundary
+Learned boundaries
+Figure3.Illustration oflemma. 2showcasing howanisotropic (right)
+embeddings lead to higher variance estimator compared to isotropic
+embeddings (left). We sample 100training points for the 2-class clas-
+sification task and fit a logistic regression–repeating the process over
+numerous training set sample. Each sampling results in a decision
+boundary (purple).
+tribution shape. Following the same type of derivations
+asdoneinthelinearregime–withtheexceptionofsome
+additionalregularityconditions–weareabletoprecisely
+identify the isotropic Gaussian as the unique optimum to
+minimize bias as formalized below.
+Theorem 1: isotropic Gaussian Optimality
+Theintegratedsquarebias(ISB)overquerypointsisgivenby
+ISB𝑘-NN=𝑟4
+0
+(𝐾+2)2𝜏2
+𝑔𝐽(𝑝)+𝑂(𝑟4
+0),(k-NN)
+ISBkernel≤ℎ2𝜇2(𝐾)
+22
+2𝐵2+8𝐿2𝐽(𝑝)
++𝑜(ℎ4),(kernel)
+and among distributions with a scalar-based covariance con-
+straint, the isotropic Gaussian is the unique minimizer of the
+integrated square bias. (Proof in Sections B.4 and B.7.)
+Numerous additional details and discussions on the
+regularity assumptions we employed are provided in Sec-
+tion A. Together, these results establish the isotropic Gaus-
+sian distribution as the optimal design to minimize the
+worst-case risk of a foundation model across downstream
+tasks.
+3.3 Geometric and Practical Insights
+We now empirically validate that the isotropic Gaussian is
+optimal when no information about downstream tasks is
+available. We focus on linear probing (Section 3.1), where
+all considered distributions have the same total variance.
+Whenemployingalinearprobe,ananisotropicdistri-
+bution increases both bias (with Tikhonov regularization)
+and variance. Examining bias first (lemma. 1), we present
+in Figure 18 visualizations for both continuous regres-
+sion and discrete classification tasks. We observe that
+the cosine similarity between estimated and ground-truthparameters equals 1 only for isotropic distributions, de-
+gradingforanisotropiccasesregardlessofsamplesizeor
+regularization strength. Regarding variance (lemma. 2),
+we show in Figure 3 that learned parameters vary sig-
+nificantlymoreacrosstrainingsetswhenthecovariance
+is anisotropic (right) compared to isotropic (left)—even
+whenusinglogisticregressioninsteadofOLS.Figure17
+furtherillustratesthiseffect,showingthedistributionof
+learned𝛽parameters across different training samples for
+bothcases. Theanisotropicdistributionclearly produces
+higher-variance estimators.
+These theoretical and empirical results establish our
+designprincipleforLeJEPA:embeddings 𝑓𝜽(𝒙)shouldfollow
+an isotropic Gaussian distribution to minimize worst-case risk
+acrossdownstreamtasksencounteredpost-training. Section4
+introduces a novel regularizer to achieve this distribution.
+4 SIGReg: Reliable Isotropic
+Gaussian Regularization in
+High-Dimension
+Having established the isotropic Gaussianas the optimal
+embedding distribution (Section 3), we now introduce
+Sketched Isotropic Gaussian Regularization(SIGReg)–a dis-
+tribution matching objective that is simultaneously (i)
+differentiable, (ii)scalable, (iii)provable, and (iv)interpretable.
+SIGReg buildson threekey innovations. First, we formu-
+latedistributionmatchingasastatisticaltestunderthenull
+hypothesis𝑃𝜽=𝑄(Section4.1). Second,weidentifyatest
+thatguaranteesboundedgradientsandcurvaturewhile
+maintaining linear complexity and efficient multi-GPU
+scaling(Section4.2). Third,SIGRegbypassesthecurseof
+dimensionality,eliminatingcollapsedshortcutsolutions
+entirely (Section 4.3).
+4.1 Hypothesis Testing as a Judge
+Asking for 𝑓𝜽(𝒙)’s distribution 𝑃𝜽to match a target distri-
+bution𝑄istypicallydonebycreatingvariousmeasures
+of distance or divergence, and estimating them in high-
+dimension. Weproposeadifferentstartingpointgrounded
+in statistics. Consider the hypothesis testing framework
+[Fisher, 1928, Neyman and Pearson, 1933] given by
+𝐻0:𝑃𝜽=𝑄vs.𝐻 1:𝑃𝜽≠𝑄,(2)
+with𝐻0being referred to as thenull hypothesis. That is,
+we are asking in Equation (2) if there is enough empiri-
+cal evidence to reject the null. To answer that question,
+one (i) employs atest-statistic, i.e., a single scalar value
+summarizingtheevidencefromtheempiricalsamples,(ii)
+determinesacriticalvalue 𝜏𝛼forthetest-statisticbasedon
+theprobability 𝛼ofTypeIerror,i.e.,ofmistakenlyrejecting
+a true null hypothesis, (iii) compares the test-statistic to
+6
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? |Sec 4: SIGReg| Sec 5: LeJEPA | Sec 6: Experiments
+the critical value 𝜏𝛼; if the test-statistic exceeds 𝜏𝛼, reject
+the null hypothesis. If the null is not rejected, we can only
+claim thatthere is not sufficient empirical evidence against
+𝑃𝜽=𝑄.
+Asitstands,Equation(2)remainsimpracticalinlarge
+dimensionasexistingtestshaveatleastquadraticcomplex-
+itywiththenumberofsamplesconsidered(moredetailsin
+Section F). We thus propose to derive a sketching strategy
+by decomposing Equation (2) into simpler univariate tests.
+Denotingthepush-forwarddistributions 𝑃(𝒂)
+𝜽≜(𝒂⊤)#𝑃𝜽
+and𝑄(𝒂)≜(𝒂⊤)#𝑄, wecandefinethefollowingdirectional
+univariate test
+𝐻0(𝒂):𝑃(𝒂)
+𝜽=𝑄(𝒂)vs.𝐻 1(𝒂):𝑃(𝒂)
+𝜽≠𝑄(𝒂),(3)
+for a given directional unit-norm vector 𝒂∈𝒮𝐾−1. The
+correspondingdirectional test-statisticof Equation (3) is
+computed as 𝑇({𝒂⊤𝑓𝜽(𝒙𝑛)}𝑁
+𝑛=1). Examples of tests 𝑇will
+beprovidedinthelaterSection4.2. Repeatingthatprocess
+over a set of 𝑀directions A ≜{𝒂 1,...,𝒂𝑀}and aggre-
+gating the individual values lead to the followingglobal
+test-statistic
+𝑇A({𝑓𝜽(𝒙𝑛)}𝑁
+𝑛=1)≜max
+𝒂∈A𝑇({𝒂⊤𝑓𝜽(𝒙𝑛)}𝑁
+𝑛=1).(4)
+Wenowprovideaformalstatementassertingtheconsis-
+tency of Equation(4) to test the original multivariatenull
+hypothesis from Equation (2). Our result leverages the
+well-knownunion-intersectionprinciple[Roy,1953],and
+a slightly modified Cramér-Wold theorem. We denote by
+𝑑=equality in distribution.
+Lemma 3: Hyperspherical Cramér-Wold
+Let𝑋,𝑌beR𝑑-valued random vectors, then
+⟨𝒖,𝑋⟩𝑑=⟨𝒖,𝑌⟩,∀𝒖∈S𝑑−1⇐⇒𝑋𝑑=𝑌.
+Convergenceindistributionalsoholds. (ProofinSectionB.8.)
+Theorem 2: Sufficiency of directional tests
+Equation (4) is a valid statistical test for Equation (3) as
+𝑃=𝑄=⇒lim sup
+𝑛→∞Pr
+𝑇A({𝑓𝜽(𝒙𝑛)}𝑁
+𝑛=1)≥𝜏𝛼
+≤𝛼,(level)
+𝑃≠𝑄=⇒lim sup
+𝑛→∞Pr
+𝑇A({𝑓𝜽(𝒙𝑛)}𝑁
+𝑛=1)≥𝜏𝛼
+=1,(power)
+(Proof in Section B.9.)
+Theassumptionsrequiredintheproofofthm.2hold
+forclassicalconsistentunivariatetests 𝑇suchastheones
+presented in the following Section 4.2.
+Figure 4.Examples of distributions living on the surface of the sphere
+with varying Sobolev smoothness coefficients 𝛼. As per thm. 5, the
+greater𝛼is, the more global will be the impact of SIGReg for a given
+numberofdirections 𝑀. Practically,thisrepresentsthedistributionof
+theencoder’soutput. Becausethetargetdensity(isotropicGaussian)is
+smooth, the 𝛼coeffcients of the embedding will quickly grow hereby
+making SIGReg (def. 2) immune to the curse of dimensionality.
+4.2 SIGReg: Sketching the Epps-Pulley
+Test is Stable and Scalable
+Ourproposedregularizer–coinedSketchedIsotropicGaus-
+sian Regularization (SIGReg)–follows directly from thm. 2
+usinganystatisticaltest 𝑇targetedtowardstheisotropic
+Gaussian, illustrated in Figures 2 and 5, and formalized
+below.
+Definition 2: SIGReg (PyTorch code in algorithm 1)
+SIGRegsketchesastatisticaltest 𝑇towardsisotropicGaussian
+SIGReg𝑇(A,{𝑓 𝜽(𝒙𝑛)}𝑁
+𝑛=1)≜1
+|A|Õ
+𝒂∈A𝑇({𝒂⊤𝑓𝜽(𝒙𝑛)}𝑁
+𝑛=1),
+(SIGReg)
+where we recommend the Epps-Pulley test (Section 4.2.3) for
+𝑇.
+We replace the maximum over 𝒂∈Ain thm. 2 by
+anaveragein (SIGReg) toavoidsparsegradientoverthe
+directions in A. We now delve on the choice of 𝑇for
+which we compare well-known candidate tests in the field
+of statistics that are categorized into (i) moment based
+(Section4.2.1),(ii)CDFbased(Section4.2.2),and(iii)CF
+based (Section 4.2.3) statistics–ultimately justifying our
+choice of the Epps-Pulley statistic.
+4.2.1 Moments are Unstable and Insufficient
+Thefirstfamilyofstatisticsweconsideraremoment-based.
+TakingthestandardGaussianasaninstanciationforthe
+moments, we can define the Jarque-Bera [Jarque and Bera,
+1980] test that compares the third and fourth moments,
+7
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? |Sec 4: SIGReg| Sec 5: LeJEPA | Sec 6: Experiments
+−2 0 2
+x1(blue) —x2(red)050100150Count
+−2 0 2
+x1−202x2
+−5 0
+/angbracketleftx,ai/angbracketrighti:0i:1i:2i:3i:4i:5i:6i:7i:8i:9p(/angbracketleftx,ai/angbracketright)
+i:0i:1i:2i:3i:4i:5i:6i:7i:8i:90.20.61.0/lscript1and/lscript2vcreg ext jarque beta watson cramer von mises anderson darling epps pulley
+Figure 5.Constructed data density with “X” distribution whose marginals are standard Gaussian and whose covariance is identity
+(left densities). Applying 𝑀=10projections on the half circle directions produces 10univariate distributions that can be compared
+against a standard Gaussian (left) using any preferred statistic from Section 4.2. The appropriate direction is able to capture the
+degenerate distribution of the data hereby creating a spike in the statistic value.
+i.e., skewness and kurtosis, as
+JB(𝒖)≜𝑁
+6©­
+«skew(𝒖)2+ 
+dkurt(𝒖)−3
+2!2
+ª®
+¬,(Jarque-Bera)
+where skewis the skewness computed from the data as
+1
+𝑛Í𝑛
+𝑖=1(𝑥𝑖−ˆ𝜇)3
+ˆ𝜎3anddkurtisthekurtosis1
+𝑛Í𝑛
+𝑖=1(𝑥𝑖−ˆ𝜇)4
+ˆ𝜎4. Typically,
+the(Jarque-Bera) test is used to see if a density follows a
+Gaussian distribution of any mean and variance–hence it
+only looks at moments 3 and 4. In our case we aim for a
+standard Gaussian test and thus add the usual statistics
+on the first two moments, leading to the extended test
+EJB(𝒖)≜𝑁ˆ𝜇(𝒖)2
+ˆ𝜎(𝒖)2+(𝑁−1) ˆ𝜎(𝒖)2−12
+2+JB(𝒖).
+(Extended Jarque-Bera)
+The(Extended Jarque-Bera) acts as a moment matching
+problemoverthefirstfourmoments. Suchmomentmatch-
+ing methods have proven powerful not only for statistical
+tests but also as mean to learn parametric and nonpara-
+metric models of data.
+TheStabilityandIdentifiabilityConundrum.Wenow
+explain why moment-based tests–albeit powerful–will
+not be suited for LeJEPA. The 𝑘𝑡ℎof a distribution 𝑃
+is denoted as 𝑚𝑘(𝑃). The first observation is that well-
+behaved distributions abiding the Carleman’s conditionÍ∞
+𝑘=1𝑚2𝑘(𝑄)−1/(2𝑘)=∞[Carleman,1926],suchastheGaus-
+sian, or for distributions with finite interval [Hausdorff,
+1923]areuniquelydeterminedbytheirmoments. However,
+using a finite number of moments creates the following
+non-identifiabilityissuewhichwell-knowninstatisticsand
+oftenusedasamotivationtouseallmoments[Lehmann
+and Romano, 2005].Theorem 3: Insufficiency of K Moments
+Minimizing the following objective with𝑐 𝑘>0,∀𝑘
+𝐾Õ
+𝑘=1𝑐𝑘
+𝑚𝑘
+𝑃(𝒂)
+𝜽
+−𝑚𝑘
+𝑄(𝒂)2
+,
+forfinite𝐾doesnotimply 𝑃(𝒂)
+𝜽=𝑄(𝒂). (ProofinSectionB.11.)
+Hence thm. 3 prescribes us with the guideline to em-
+ploy as large 𝐾as possible to remove collapsed shortcut
+solutionbymakingsureourdistributionmatchingisac-
+curate. Yet, doing so leads to unstable gradient-based
+training due to the gradient norm scaling as 𝑂(𝑘), and
+thevarianceofMonteCarlogradientestimatesgrowing
+as𝑂(𝑘2𝑚2(𝑘−1))for the𝑘-th moment since∇𝜃𝑚𝑘(𝑃(𝒂)
+𝜽)=
+∥E
+𝑘(𝒂⊤𝑓𝜽(𝒙))𝑘−1𝒂⊤𝐽𝑓𝜽(𝒙)
+∥, with𝐽𝑓𝜽(𝒙)∈R𝐾×𝑃the Jaco-
+bianmatrix–herebycreatinganimpracticalsituationwhere
+training stability and identifiability can not be achieved
+simultaneously.
+4.2.2 Cumulative Density Functions are Impractical
+ThesecondfamilyoftestsactsupontheCDF.Becausethose
+tests require sorting, let’s denote the 𝑘thorder-statistics of
+𝑁samplesby𝑥𝑘:𝑁. Twohighlystandardtestsarequadratic
+EmpiricalDensityFunctionstatisticswithdifferentweight-
+ingknownasCramér-vonMises[Cramér,1928,VonMises,
+1981]andAndersonDarling[AndersonandDarling,1952],
+and given by
+𝑇𝑤=𝑁∫∞
+−∞(𝐹𝑁(𝑥)−𝐹(𝑥))2𝑤(𝑥)𝑑𝐹(𝑥)
+𝑤(𝑥)=1,(Cramér-von Mises)
+𝑤(𝑥)=[𝐹(𝑥)(1−𝐹(𝑥))]−1,(Anderson-Darling)
+where𝑤(𝑥)is a weighting function. Adding the 𝑈2statis-
+tics on top of Equation (Cramér-von Mises) recovers the
+8
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? |Sec 4: SIGReg| Sec 5: LeJEPA | Sec 6: Experiments
+0 5
+dim 1−2024dim 2original data
+0 5
+dim 1VCReg
+0 5
+dim 1ExtendedJarqueBera
+0 5
+dim 1CramerVonMises
+0 5
+dim 1Watson
+0 5
+dim 1AndersonDarling
+0 5
+dim 1EppsPulley
+−2.50.02.5
+dim 3−4−2024dim 4
+−2.50.02.5
+dim 3
+−2.50.02.5
+dim 3
+−2.50.02.5
+dim 3
+−2.50.02.5
+dim 3
+−2.50.02.5
+dim 3
+−2.50.02.5
+dim 3
+Figure 6.𝑁=100 samples are drawn from a 1024-dimensional standard Gaussian, and the first 2coordinates are altered to produce
+the“X”distributionfromFigure5(left-mostcolumn). Foreachstatistic(allothercolumns),weperformgradientdescentonthe
+samples to minimize their value, at each iteration step with sample 𝑀=10random directions to evaluate SIGReg (recall def. 2). We
+obtainthatalbeitthisisahigh-dimensionaldistributionwithlimitednumberofsamples,SIGRegisabletocapturethedegenerate
+subspaceandadaptthedataaccordinglytomatchanisotropicGaussiandistribution. Additionalfigureswithvaryingdimensions
+and number of 1d projections are provided in Figure 16.
+Watson test [Watson, 1961]
+𝑈2=𝑇𝑤−𝑁
+¯𝐹−1
+22
+.(Watson)
+We do not consider the Kolmogorov-Smirnov test [Kol-
+mogorov,1933]asitemploysthe ℓ∞-norminsteadofthe
+ℓ2-norm hereby producing sparse gradients. Another
+commontestistheShapiro-Wilktest[ShapiroandWilk,
+1965] which we found to be unstable in practice–details
+are provided in Section E.
+LackofScalabilityandDifferentiability.CDF-based
+tests require sorting that have been highly optimized, e.g.,
+withthe𝒪(𝑁log(𝑁)) Quicksortalgorithm[Hoare,1962]
+butthatnonethelessbreakstheembarrassinglyparallelna-
+ture of SGD–especially on multi-GPU [Tanasic et al., 2013,
+Maltenberger et al., 2022] due to synchronization require-
+ments. Moreover, these tests involve non-differentiable
+operations (sorting and order statistics), making them
+unsuitable for gradient-based optimization without re-
+laxations[Cuturiet al.,2019,Grover etal.,2019,Petersen
+etal.,2022]. Whilethereexistsintricatesketchingsolutions
+[Dunning and Ertl, 2019, Masson et al., 2019, Dunning,
+2021], each of those solutions introduce numerous addi-
+tionalhyper-parameters–goingagainstourfirstmotivation
+for LeJEPA.4.2.3 Characteristic Functions are Stable, Scalable
+and Identifiable
+ThethirdfamilyoftestsisconcernedwithEmpiricalChar-
+acteristicFunctions(ECF)whicharetheFouriertransform
+ofthedensityfunction. TheEpps–Pulleytest[Eppsand
+Pulley, 1983] is one of the most popular test and simply
+comparesinweighted ℓ2-normtheECFofthedataagainst
+a target CF
+𝐸𝑃=𝑁∫∞
+−∞ˆ𝜙𝑋(𝑡)−𝜙(𝑡)2𝑤(𝑡)𝑑𝑡.(Epps–Pulley)
+The first crucial observation is that the ECF being defined
+asˆ𝜙𝑋(𝑡)=1
+𝑛Í𝑛
+𝑗=1𝑒𝑖𝑡𝑋𝑗isnaturallydifferentiableandeasily
+computed in distributed settings via efficient all_reduce
+operations, as the ECF is a simple average of complex
+exponentials. TheweightfunctionistypicallyGaussian,
+such as𝑤(𝑡)=𝑒−𝑡2/𝜎2with𝜎commonly set to1.
+Other tests, e.g., based on the Entropy [Székely and
+Rizzo, 2005] are not considered here as they require nu-
+merous additional design choices for the univariate En-
+tropyestimation[Silverman,2018,Beirlantetal.,1997],e.g.,
+using kernels [Joe, 1989], or M-estimators [Miller, 2003].
+Epps-Pulley has bounded loss, gradient and curva-
+ture.We now consider the remaining two families of tests:
+moment-basedandCF-based. First,recallthatmoments
+arepolynomialinthe dataandwithextremegrowthrate
+9
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? |Sec 4: SIGReg| Sec 5: LeJEPA | Sec 6: Experiments
+Algorithm1.SIGRegwithEpps-PulleystatisticwithDDPsupportand
+𝒪(𝑁)time and memory complexity. x is a (N, K) tensor, num_slices is
+|A|in def. 2, ‘global_step‘ is used for sync. sampling across GPUs and
+canbeomitedforsingle-GPUtraining. Anoptimizedimplementation
+withcachingisalsoprovidedinourofficialcodebase,computationtimes
+provided in Table 6.
+defSIGReg ( x , global_step , num_slices =256) :
+# s l i c e sampling−−synced across devices−−
+dev =dict( device=x . device )
+g = torch . Generator (∗∗dev )
+g . manual_seed ( global_step )
+proj_shape = ( x . size ( 1 ) , num_slices )
+A = torch . randn ( proj_shape , generator=g ,∗∗dev )
+A /= A. norm ( p=2 , dim=0)
+#−−Epps−Pulley s t a t . see Sec . 4.3 f o r a l t .−−
+# i n t e g r a t i o n points
+t = torch . linspace (−5 , 5 , 17 ,∗∗dev )
+# t h e o r e t i c a l CF f o r N(0 , 1) and Gauss . window
+exp_f = torch . exp (−0.5∗t∗∗2)
+# e m p i r i c a l CF−−gathered across devices−−
+x_t = ( x @ A) . unsqueeze ( 2 )∗t# (N, M, T)
+ecf = (1 j∗x_t ) . exp ( ) . mean( 0 )
+ecf = all_reduce ( ecf , op="AVG" )
+# weighted L2 distance
+e r r = ( ecf−exp_f ) .abs( ) . square ( ) . mul ( exp_f )
+N = x . size ( 0 )∗world_size
+T = torch . trapz ( err , t , dim=1)∗N
+returnT
+for higher moment–assuming they even exist. Even for
+well-behaved distributions, raising values to a power of
+𝑘canquicklyleadtoexplodinggradients. Thiscomesin
+sharpcontrastwiththeECFwhichisalwaysboundedand
+with bounded gradients for any input distribution for the
+projected samples𝑧 𝑖=𝒂⊤𝑓𝜃(𝒙𝑛),𝑛=1,...,𝑁.
+Theorem 4: Stability of Epps-Pulley Test
+(Epps–Pulley) satisfies for samples𝑧 1,...,𝑧𝑁
+𝜕𝐸𝑃(a)
+𝜕𝑧𝑖≤4𝜎2
+𝑁,𝜕2𝐸𝑃(a)
+𝜕𝑧2
+𝑖≤𝐶√𝜋𝜎3
+2𝑁,
+with constant𝐶, and bandwidth𝜎. (Proof in Section B.12.)
+By the chain rule, thm. 4 directly gives ∥∇𝜃𝐸𝑃(a)∥≤
+4𝜎2
+𝑁Í𝑁
+𝑖=1∥a⊤∇𝜃𝑓𝜃(x𝑖)∥,providingstablegradients. Thelim-
+itations of moment-based and CDF-based tests coupled
+with thm. 4 justifies our choice of the (Epps–Pulley) : (i)
+DDP-friendlyandscalable,(ii)uniformlyboundedgradi-
+ents and curvature regardless of input distribution, and
+(iii) hyper-parameter free implementation. Lastly, we
+highlight thatour implementation has a linear memory and
+computationalcomplexityof 𝒪(𝑁),with𝑁the minibatchsize.
+The implementation of SIGReg using that statistical test is
+provided in algorithm 1, along with computation times of
+the forward-backward pass in Table 6.
+AsalaststepbeforeintroducingLeJEPA,weoughtto
+102103
+M(log-scale)050010001500Ea/bracketleftbig
+T({a/latticetopfθ(xn)}N
+n=1)/bracketrightbig
+β=−2.79
+R2= 0.87β=−285.91
+R2= 0.96
+random
+ﬁxedFigure7.Expecteddirectionalstatisticattheendoftraining(y-axis)
+forvarying 𝑀(numberofdirectionsusedateachtrainingstep,x-axis).
+The𝑀directions are either resampled (green) or kept fixed (blue) at
+each training step. While for fixed directions we benefit from thm. 5
+bound where increasing 𝑀reduces the overall expected loss, being able
+to resample at every step provides significant coverage boost for free.
+studytherequirementsonthenumberofdirections( |A|)
+for (2) to be effective in high-dimension.
+4.3 How SIGReg Beats the Curse of
+Dimensionality
+Thislastsectionseekstocharacterizehowmanyslicesin A
+one must sample for (SIGReg) to be an effective statistical
+test. ThatdesigniscrucialifwehopeforLeJEPAtosuccess-
+fully converge towards isotropic Gaussian embeddings.
+Smoothness Beats the Curse of Dimensionality
+Our first argument arguing for a favorable scaling of |A|
+withtheembeddingdimension 𝐾reliesonthesmoothness
+of𝑃𝜽as measured by its Sobolev regularity 𝛼[Adams
+and Fournier, 2003]. We formalize below a bound on
+the directional test from Equation (3) over all possible
+directions 𝒂when the test statistic is minimized over
+|A|=𝑀 directions. While we provide bounds on the
+expected discrepancy over random directions 𝒂when the
+EPtestissatisfied(equalszero)onafinitesetofdirections,
+the provided proof includes the case of moment-based
+and CDF-based tests as well.
+10
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg |Sec 5: LeJEPA| Sec 6: Experiments
+Theorem 5: Unified Error Bounds
+Let𝑝𝜽∈𝐻𝛼(R𝐾),𝒂∼𝒰(𝒮𝐾−1), and(Epps–Pulley)=0 , i.e.,
+𝑃(a)
+𝜃=𝑄(a),∀𝒂∈A, then
+E𝒂∫
+R𝜑𝑎(𝑡)−𝜑𝒩(𝑡)2𝑑𝑡
+≤𝐶(𝐾,𝛼)|A|−2𝛼/(𝐾−1)
+×∫∞
+0𝜑·(𝑟)−𝜑𝒩(𝑟)2
+𝐻𝛼(𝒮𝐾−1)𝑑𝑟,
+(Proof in Section B.10.)
+As|A|→∞, the bound decays as |A|−2𝛼/(𝐾−1), showing
+that|A|=𝑂(𝐾) directions suffice for 𝜖-approximation
+when𝛼islarge. Someexamplesofembeddingdensities
+with varying 𝛼are provided in Figure 4. The following
+statementcharacterizeshowthe 𝑀directionsactuallycon-
+strain the entire space as a function of 𝛼. The constant
+𝐶(𝐾,𝛼)=22𝛼𝜋(𝐾−1)/2Γ(𝛼+𝐾−1
+2)
+(𝐾−1)Γ(𝛼)Γ(𝐾−1
+2)is visualized in Figure 15 (left)
+depicting how 𝛼and|A|interact. In words, we obtain
+that thanks to the natural smoothness of DN–either stem-
+ming from the architecture or the implicit and explicit
+regularizers used during training–applying SIGReg on |A|
+directionscanbesufficienttotightlyconstraintheentire
+space. Wenotethatconsideringtheworstcaseover 𝒂or
+using low-discrepancy sequences for 𝒂does not impact
+the asymptotic bounds, details provided in Section D.
+SGD Beats the Curse of Dimensionality
+Our second argument leverages the iterative nature of
+DN training. Although we may use only |A|to be a few
+hundreds,thecumulativenumberofsampleddirections
+growslinearlywithtrainingtime. Thisresamplingeffect
+(illustratedinFigure7,bottom)enablesrapidconvergence.
+Even small|A|achieves tight distributional matching com-
+paredtokeepingtheset Afixedthroughoutminibatches
+(recallthm.5). Ourexperimentsshowthatevenwith |A|
+as low as 16can easily outperform a fixed set with |A|of
+order of thousands thanks to the compounding effect of
+resampling at each minibatch.
+Empirical Validation on Synthetic Data
+We conclude this section with a controlled experiment
+applying (SIGReg) with gradient-based training to pro-
+duce isotropic embeddings. In this setup, we directly
+consider embeddings 𝒁which we will differentiate and
+optimizedtominimize (SIGReg) . Bydirectlyoptimizing
+theembeddingsweareabletoobservetheimpactofthe
+loss without any possible constraint and regularization
+that would come fromthearchitecture. Wesample 𝑁i.i.d.
+samples 𝒙𝑛in a𝐷-dimensional space. This sampling is
+basedonanisotropicGaussiandistribution–butthefirstAlgorithm 2.LeJEPA implementation–works out-of-the-box on any
+dataset, with DDP, with any backbone, e.g., torchvision or timm. For
+non-ViT architectures (e.g., ResNet), set global_views = all_views. We
+use bs for the minibatch size, SIGReg is from algorithm 1.
+defLeJEPA( global_views , all_views , lambd ) :
+" " " global_views and al l_ vie ws are l i s t s of
+tensors , lambd i s a scalar " " "
+# embedding of global views
+g_emb = forward ( torch . cat ( glob_views ) )
+# embedding of l o c a l views
+# i f resnet : skip with a_emb=g_emb
+a_emb = forward ( torch . cat ( al l_ vi ews ) )
+# LeJEPA loss
+centers = g_emb . view (−1 , bs , K) . mean( 0 )
+a_emb = a_emb . view (−1 , bs , K)
+sim = ( centers−a_emb) . square ( ) . mean ( )
+sigreg = mean( SIGReg (emb, global_step )foremb
+ina_emb)
+return(1−lambd )∗sim + lambd∗sigreg
+two dimensions are again set to the adversarial “X” shape.
+That is, among the 𝐷dimensions, only two must be trans-
+formed as all the other ones already obey the isotropic
+Gaussiantargetdistribution. Wethenmakethesamples
+𝒙𝑛differentiable and optimize then to minimize the value
+of the different statistical tests compute on 𝑀random
+𝑀random directions. Those directions are resampled
+aftereachgradientstep–whichfollowstheprocedurewe
+will employ in LeJEPA. We present the results in Figure 6
+demonstrating that even in challenging case, i.e., 𝐷=512
+and𝑀=16,SIGRegisabletodetectthetwodegenerate
+dimensions and unfold them back to how they should
+look like under the target distribution.
+5 LeJEPA: Stable and Scalable
+Implementation
+HavingestablishedthatisotropicGaussiansaretheoptimal
+embedding distribution for foundation models (Section 3)
+andintroducedSIGRegtoachievethisdistribution(def.2),
+we now present the complete LeJEPA framework. We first
+evaluatecandidatestatisticaltests(Sections4.2.1and4.2.2)
+and identify characteristic function-based tests as optimal
+forgradient-basedtraining(Section4.2.3). ThefullLeJEPA
+implementation follows in Section 5.1.
+5.1 LeJEPA: SIGReg + Prediction Loss
+We now discuss the implementation of LeJEPA starting
+with SIGReg and followed by the prediction and total
+losses.
+TheSIGRegLoss.Wechose (Epps–Pulley) foritsprov-
+ableboundedness(thm.4)anditsscalability. Itsimplemen-
+tation follows exactly the equation except for the integrate
+whichisestimatedusingaquadratureapproximation. We
+11
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA |Sec 6: Experiments
+find that the simple trapezoidal quadrature rule is suffi-
+cient even with as few knots as 17, as ablated in Figure 20.
+Inparticular,weleveragethesymmetryoftheintegrand
+todoublethenumberofknotsforfree,seetheofficialcode.
+On the other hand, the use of minibatches introduces a
+bias vanishing at rate𝒪(1/𝑁), as formalized below.
+Theorem 6: Vanishing gradient bias
+The expectation of (Epps–Pulley) satisfies
+Eh
+b𝐿𝑛(𝜃)i
+=𝐿(𝜃)+1
+𝑁∫
+R𝑤𝑠(𝑡) 
+1−|𝜑𝑃(𝑡)|2
+𝑑𝑡,
+therefore both the loss and its derivative have a bias of order
+𝑂(1/𝑛). (Proof in Section B.13.)
+Hence,thegradientsweobtainfromusing (Epps–Pulley)
+are biased by an explicit 𝒪(1/𝑁)term. We found this bias
+to be minimal and not a concern even for minibatches
+as small as 16. Unbiased alternatives include using U-
+statistic debiasing of |𝜙𝜃|2or sample splitting, which we
+do notexplore inthis study. Ourfinal implementationof
+the SIGReg term with Epps-Pulley statistic is provided in
+algorithm 1.
+ThePredictionLoss.Tostandardizenotations,weadopt
+theDINO[Caronetal.,2021]setupofgenerating 𝑉𝑔global
+views and𝑉𝑙local views, leading to a total of 𝑉=𝑉𝑔+𝑉𝑙
+views. We set the first 1,...,𝑉𝑔indices of each 𝒛𝑛,𝑣as the
+global views. For the cases without local views, simply
+set𝑉𝑙=0. The predictionlossisthengiven byhavingall
+views predict the global views as
+ℒpred({𝒛𝑛,𝑣}𝑉
+𝑣=1)=1
+𝑉𝑔𝑉𝑔Õ
+𝑣=11
+𝑉𝑉Õ
+𝑣′=1∥𝒛𝑛,𝑣−𝒛𝑛,𝑣′∥2
+2(5)
+=1
+𝑉𝑉Õ
+𝑣′=11
+𝑉g𝑉gÕ
+𝑣=1𝒛𝑛,𝑣−𝒛𝑛,𝑣′2
+2(6)
+≜1
+𝑉𝑉Õ
+𝑣′=1𝝁𝑛−𝒛𝑛,𝑣′2
+2,(7)
+where we denote 𝝁𝑛≜1
+𝑉𝑔Í𝑉𝑔
+𝑣=1𝒛𝑛,𝑣, the Equation (5) to
+Equation (6) derivations are detailed in Section B.6.
+LeJEPALoss.Thefinaltotallosssimplycombinesthe
+above prediction loss along with SIGReg on each views as
+per
+ℒLeJEPA({𝒙𝑛,𝑣}𝐵,𝑉
+𝑛,𝑣=1)=𝜆
+𝑉𝑉Õ
+𝑣=1SIGReg({{𝒛 𝑛,𝑣}𝐵
+𝑛=1})
++1−𝜆
+𝐵𝐵Õ
+𝑛=1ℒ(𝑉g)
+pred({𝒛𝑛,𝑣}𝑉
+𝑣=1).(LeJEPA)Wepresent (LeJEPA) ’simplementationinalgorithm2.
+Altogether,theentireimplementation–besidestheusual
+modeldefinitions,optimizers,anddataloaders–onlytakes
+a few dozens lines in PyTorch (algorithms 1 and 2). The
+absenceofprototypes,stop-gradients,andteacher-student
+networks makes (LeJEPA) appealing as it only contains
+one hyperparameter, 𝜆, balancing the trade-off between
+the prediction and isotropic Gaussian terms.
+5.2 Relation to Prior Work
+Prior to presenting our experiments (Section 6), we con-
+cludebydiscussinghowourproposedLeJEPAandSIGReg
+objective relate to existing frameworks in the literature.
+While there is no existing solution employing such
+slicing and distribution matching for JEPAs, there exists
+similar pipelines for generative models and optimal trans-
+port. Notably,theSlicedScoreMatching[Songetal.,2020]
+proposes to leverage univariate slicing of the space to ease
+the estimation of a density for generative models. In a
+similarvein,theslicedWassersteindistance[Bonneeletal.,
+2015,NguyenandHo,2023]usessuchstrategytospeedup
+and improve optimal transport. Furthermore, when the
+integralofthe (Epps–Pulley) testiscomputedexactly,as
+opposed to our quadrature, each slice loss value recovers
+thekernelMMD[Sriperumbuduretal.,2010,Grettonetal.,
+2012,Chwialkowskietal.,2016]measuringthedistancebe-
+tweentwodistributions–albeitwithaquadraticcomplexity.
+Lastly, it is possible to recover some existing SSL frame-
+works in the limit by employing LeJEPA with a particular
+test–insteadofthepreferred (Epps–Pulley) . Forexample,
+Setting𝑇({𝑥𝑛}𝐵
+𝑛=1)=mean({𝑥 𝑛}𝐵
+𝑛=1)2+(std({𝑥 𝑛}𝐵
+𝑛=1)−1)2
+and using that 𝑇with SIGReg in LeJEPA recovers the
+VICReg SSL method in the limit of large number of slices.
+In fact, SIGReg will enforce in expectation that E[Z]=0
+and Cov(Z)=I 𝑑, where I𝑑denotes the 𝑑×𝑑identity
+matrix–derivations provided in Section B.14. And since
+our invariance term is simply the ℓ2distance between
+theviews’embeddings,LeJEPArecoversVICRegforthis
+degenerate statistical test. Based on thm. 3, we however
+stronglyadvocateagainstsuchasettingasitwouldlead
+to shortcut solutions–a phenomenon already observed in
+VICReg.
+6 LeJEPA: Empirical Validation
+We now use the LeJEPA implementation described in
+Section5.1todemonstrateitseffectivenessthroughcom-
+prehensiveexperiments. WeshowthatLeJEPA:(i)trains
+reliably across diverse architectures and datasets (Sec-
+tion 6.1), (ii) provides an informative training loss for
+model selection (Section 6.2), (iii) outperforms frontier
+vision models on small-scale in-domainpretraining(Sec-
+tion 6.3), (iv) scales successfully to nearly 1 billion param-
+eters on ImageNet-1k (Section 6.4), and (v) learns rich
+12
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA |Sec 6: Experiments
+10−310−210−1
+λ(log-scale)74767880828486top1 acc. (%)
+ResNet50-inet100 acc. vs λ
+2 Views
+4 Views
+8 Views
+Figure 8.Inet100 with 400pretraining epochs and resnet50 backbone.
+Wedepictlinearprobeperformancesasafunctionof 𝜆andthenumberof
+views𝑉(recall(LeJEPA) ). We observe that performances are stable over
+𝜆–withpeakperformanceobtainbyslightlyadjust 𝜆proportionally
+to the number of views. The corresponding performance values are
+provided in Table 7.
+semanticsegmentationfeatureswithoutexplicitsupervi-
+sion.
+6.1 LeJEPA’s Stability Across
+Hyper-Parameters and Architectures
+WenowdemonstrateLeJEPA’sstabilityacrosshyperparam-
+eters, architectures, and experimental setups. Additional
+cross-domain stability results are presented in Section 6.3.
+Stabilityacrossstandardhyperparameters.Webegin
+by evaluating LeJEPA on ImageNet-100 and ImageNet-
+1K.OnImageNet-100,wetrainaResNet-50andvarythe
+number of views and the loss weighting 𝜆(Figure 8).
+Performance remains stable across both dimensions, lead-
+ing us to recommend 𝜆=0.05 as a robust default. On
+ImageNet-1K, we train a ViT-Large/14 and explore batch
+size, as well as the number of global ( 𝑉g) and local ( 𝑉l)
+views(Table1b). Wefindthattheconfigurationcommonly
+usedinpriorwork( 𝑉g=2,𝑉 l=8)transferswelltoLeJEPA.
+Notably,LeJEPAachievescompetitiveperformancewith
+batch sizes as small as 128 on ImageNet-1K (Table 1c),
+suggesting reduced memory requirements compared to
+existing methods.We thus recommend to use 𝜆=0.05 ,
+𝑉g=2,𝑉 l=8, and batch size≥128as starting points.
+StabilityacrossEpps-Pulleyhyperparameters.Wenext
+examine hyperparameters specific to LeJEPA: the num-
+ber of slices|𝒜|in SIGReg, the integration domain for
+the Epps-Pulley test (Epps–Pulley) , and the number of
+quadrature points for numerical integration. Table 1a
+showsablationsonImageNet-1KwithViT-Large/14. Both
+the integration domain and number of quadrature points
+havenegligibleimpactonperformance. Thisisexpected:
+since the characteristic function is accurate at zero, theTable1.ViT/Large-14, oninet1k pretraining for 100epochsand evalu-
+atedwithfrozenbackbonelinearprobing(top1accuracy,%).LeJEPA’s
+performanceisstableacrossallitshyperparametersandwhilesome
+may slightly improve performance, e.g., the number of slices |A|and the
+projector sizes, none of the choices lead to a catastrophic collapse.
+(a)(Epps–Pulley)parameters
+integration num_slices config/bstat_n_points
+5 17 41
+[−1,1]512 71.82 72.13 72.04
+2048 72.88 72.30 72.69
+[−3,3]512 73.95 74.16 74.04
+2048 75.02 74.68 74.77
+[−5,5]512 73.71 74.21 74.15
+2048 74.50 74.80 74.77
+(b) Number of local/global views
+# global_views (𝑉 g) 1 2 4
+# views (𝑉=𝑉 g+𝑉 l)
+4 53.06 72.26 –
+6 58.65 73.07 73.68
+8 64.46 74.24 73.94
+10 68.97 74.06 75.08
+(c) Mini-batch size
+batch_size 128 256 512 1024
+72.20 74.15 74.72 74.07
+(d) Embedding/Projector dim.
+num_slices 1024 4096
+emb. dim. 512 2048 512 2048
+proj. dim.
+64 75.29 75.32 75.50 75.65
+128 74.77 75.09 75.26 75.47
+256 74.56 74.66 75.08 75.02
+512 73.94 74.11 74.81 74.65
+1024 73.65 73.94 74.71 74.79
+(e) Register tokens
+reg_tokens 0 1 2 4 8
+num_slices
+1024 75.14 75.18 75.08 75.34 75.23
+4096 75.61 75.58 75.67 75.63 75.84
+momentsofthedistributionarewell-characterizedeven
+with a modest integration range. The number of slices |𝒜|
+has a modest effect—while more slices slightly improve
+performance, even 512 slices yield competitive results.We
+thus recommend to use 17 integration points, an integration
+domain of[−5,5], and 1024 slices as starting points.
+13
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA |Sec 6: Experiments
+2M 5M 8M 10M 12M 15M 18M
+Parameters (Millions)91.592.092.593.093.594.094.595.0Top-1 Accuracy (%)Inet10 – LeJEPA pretrained, frozen backbone, linear eval – 50 architectures (<20M params.)
+Model Family
+convnext
+efficientnet
+inception
+levit
+maxvit
+maxxvit
+resnet
+vit
+convnext˙atto˙ols
+convnext˙atto˙rmsconvnext˙femto
+convnext˙nano
+convnext˙nano˙olsconvnext˙pico˙ols
+convnext˙zepto˙rms
+convnext˙zepto˙rms˙olsconvnextv2˙femtoefficientnet˙b0˙g8˙gn
+efficientnet˙b0˙gn
+inception˙next˙atto levit˙128
+levit˙128slevit˙192levit˙conv˙256maxvit˙nano˙rw˙256maxvit˙pico˙rw˙256maxvit˙rmlp˙nano˙rw˙256maxvit˙rmlp˙pico˙rw˙256resnet14t
+resnet18dresnet26resnet26dresnet26t
+resnet32ts
+resnet33tsresnetblur18resnext26ts
+vit˙pe˙core˙tiny˙patch16˙384
+Figure 9.INet10 pretraining and frozen backbone linear evaluation across 50timm models using LeJEPA out of the box. We cross-validate the
+learning rate and weight-decay. While thereis a small variation between the best and worst performing model, weclearly see thatacross50models
+spanning8families, LeJEPA is able to produce non-trivial representations able to solve the downstream task at SOTA levels.
+Stability across architectures.A key advantage of
+LeJEPA over recent methods (e.g., ĲEPA, DINOv2) is
+its architecture-agnostic design. While most modern self-
+supervisedmethodsaretailoredtoVisionTransformers,
+LeJEPA works across diverse architecture families with-
+out modification. To validate this claim, we pretrain
+approximately 50 architectures from 8 different families
+onImageNet-10,selectingallmodelsinthetimmlibrary
+withfewerthan20Mparameters. Allmodelsareableto
+learnhigh-qualityrepresentationsreachingbetween91.5%
+to95%top1accuracywithfrozenbackbonelinearprob-
+ing. Itseemsthatmodelsperformingwellinsupervised
+learning setups are also the ones to favor for LeJEPA, such
+as resnets and ViTs.We thus recommend to use standard
+architectures such as ResNets and ViTs over specialized models
+like EfficientNet as stating point.
+Removalofpopularheuristics.Inadditiontoproviding
+reliableperformanceacrossmodelsanddatasets,LeJEPA’s
+provableconstructionenablesustoremovemanyheuristics
+traditionally used to prevent collapse. First, prior work
+has shown both empirically and theoretically that predic-
+tors in image JEPA (without asymmetric information) and
+teacher-student architectures serve primarily to prevent
+collapse [Grill et al., 2020, Jing et al., 2021, Tian et al.,
+2021, Caron et al., 2021, Chen et al., 2021]. Removing
+thesecomponentsproducescollapsedencoders,i.e.,with
+performances at chance-level. Thanks to LeJEPA’s SIGReg
+loss,wecanremoveboththepredictorandteacher-student
+architecturewithoutsuffering fromcollapse,as shownin
+Table4. Whileateacher-studentconfigurationdoespro-
+videasmallperformanceboostforViTmodels—consistent
+with observations in supervised learning via StochasticWeightAveraging[Izmailovetal.,2019]—itisnotneces-
+sarytopreventcollapse. Inoursetup,weapplySWAon
+theencoderproducing 𝜇inEquation(6). Second,recent
+work demonstrated that register tokens are needed to pre-
+vent training instabilities in vision models [Oquab et al.,
+2023, Siméoni et al., 2025, Darcet et al., 2023]. We show
+in Table 1 that such instabilities likely stem from poorly
+conditionedtrainingobjectives. Incontrast,LeJEPAdoes
+notrequireregistertokensandachievesstableperformance
+with or without them.We thus recommend training without
+apredictororregistertokens,andoptionallyapplyingSWAwith
+ViTs for a possible performance gain.
+Experiment Details 1
+We strive forsimplicityand thus adopt a unified pretraining
+pipeline. Thefollowingparametersapplytoallexperiments
+and figures unless stated otherwise in the corresponding
+caption and come from Section 6.1:
+•LeJEPA’s implementation is given in algorithm 2 with
+hyperparameter𝜆
+•Allbackbonesarefrom timmandalloptimizers/sched-
+ulers are fromPyTorchwithout modifications
+•We employeightviews( 𝑉=8)containingtwoglobal
+views(𝑉g=2)withresolution224x224and96x96for
+the local views
+•AdamWoptimizer with lr∈{5𝑒−3,5𝑒−4} andwd∈
+{1𝑒−1,1𝑒−2,1𝑒−5} –noscheduler onweight-decay,
+standard linear warm-up cosine-annealing forlr
+6.2 LeJEPA’s Training Loss is Informative
+of Downstream Performance
+A major challenge in SSL pretraining is the lack of reliable
+signals conveying the quality of the learned representa-
+tion. As a result, it is common to monitor a supervised
+14
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA |Sec 6: Experiments
+100101
+SIGReg loss (log-scale)10−1Pred. loss (log-scale)
+resnet50 - galaxy10
+18.9133.9849.0664.1379.21Accuracy
+100101
+SIGReg loss (log-scale)10−210−1Pred. loss (log-scale)
+resnet50 - inet10
+38.5152.3966.2780.1594.03Accuracy
+100101
+SIGReg loss (log-scale)10−1100Pred. loss (log-scale)
+ViT/base-14 - inet1k
+0.2318.3936.5654.7372.90Accuracy
+Figure 10.(SIGReg, prediction loss) 2𝑑-plane with downstream task accuracy shown with colors fromblue(low) tored(high). We clearly observe
+that within this plane,there exists trade-off fronts between the two terms of LeJEPA producing similar downstream performancecorresponding to
+different values of 𝜆. Yet, those fronts are linear and pointed towards the lower left corner, i.e., LeJEPA’s training loss informs of downstream test
+performance across models and datasets (columns). Additional models and datasets provided in Figure 21.
+−3−2−1 0 1 2 3
+Alignment coeﬃcient ( α)0.20.40.60.81.0Corr(train loss /λα, test acc)
+resnet18 ﬂowers102: 0.60 →0.95
+resnet50 galaxy10: 0.85 →0.98
+resnet50 inet10: 0.81 →0.99
+ViT/base-8 inet1k: 0.88 →0.93
+ViT/s-8 galaxy10: 0.88 →0.98
+ViT/s-8 inet10: 0.90 →0.98
+Figure11.Spearmancorrelation(y-axis)betweenLeJEPA’straining
+loss and downstream accuracy on the dataset’s classification task with a
+frozenbackboneandlinearevaluation. Thex-axisvaries 𝛼inEquation(8)
+following our scaling law of the loss w.r.t. 𝜆. Using𝛼=0recovers the
+plaintrainingloss. Weclearlyobserveaveryhighcorrelationalreadyfor
+𝛼=0, which further increases up to 99%for𝛼=0.4. The entire set of
+pointsisobtainedacrossnumeroushyper-parameterssuchaslearning
+rate,weightdecay,numberofepochs, 𝜆–demonstratinghowLeJEPA’s
+training loss is strongly predictive of downstream performancewhich
+can be used for label-free cross-validation.
+downstreamtaskperformance, sometimes supplemented
+with unsupervised embedding statistics [Agrawal et al.,
+2022, Garrido et al., 2023, Thilak et al., 2023]. This process
+is highly limiting since it requires labeled data that is
+costlyandoverlyspecialized. Thisisfurtherexacerbated
+inthelatestJEPAmodelswheretraininglossesexhibitlow
+correlationwithdownstreamperformance–andmaynot
+even decrease monotonically during training.
+In contrast, we find that LeJEPA’s training loss behaves
+much more favorably–providing us with a meaningful
+signal on model quality. First, we provide in Figure 10,
+the2DplanespannedbytheSIGRegandpredictionlosseswhere a clear trend with downstream task accuracy can
+beobserved. Morestrikingly,thecombinedtrainingloss
+(LeJEPA) with mixing coefficient 𝜆exhibits very high
+Spearman correlation [Spearman, 1961], denoted as 𝜌𝑠, of
+about 85%with downstream accuracy–which is consid-
+ered a strong signal. This strong relationship holds across
+datasets and architectures. As a result, a lower LeJEPA
+traininglossreliablyindicatesabetterdownstreamperfor-
+mance.
+We can further improve this correlation through a sim-
+ple scaling law based upon the trade-off weighting hyper-
+parameter𝜆
+𝐶(𝛼)=𝜌𝑠
+train_loss
+𝜆𝛼,test_accuracy
+.(8)
+By setting 𝛼≈0.4, LeJEPA’s training loss is able to achieve
+nearly 99% correlation with downstream performance
+across multiple datasets and models. We depict the
+changes in 𝐶(𝛼)as a function of 𝛼on multiple datasets
+and models in Figure 11, as well as the training LeJEPA
+lossagainstdownstreamperformanceinFigure19.The
+strong alignment between LeJEPA’s training loss and
+model quality enables label-free SSL model selection
+and cross-validation.
+6.3 In-Domain LeJEPA Outperforms
+Frontier Model Transfer Learning
+Akeypromiseofself-supervisedlearningistolearnuni-
+versal representations that generalize across tasks and
+domains. However, current frontier foundation models
+(e.g., DINOv2/v3, ĲEPA) are pretrained on natural im-
+agesforcingpractitionersinspecializeddomainstocollect
+largeamountoflabelsforsupervisedfinetuning. Infact,
+mostfrontiermodelscannotbetraineddirectlyonthose
+domains as the number of samples may be small and
+searchingagainforthehyper-parameterswouldbecum-
+15
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA |Sec 6: Experiments
+1 2 5 10 100 1000 all
+Samples per class20304050607080Accuracy (%)
+Full ﬁnetuning
+1 2 5 10 100 1000 all
+Samples per class
+Frozen backbone
+LeJEPA convnextv2 nano (galaxy10)
+LeJEPA levit 128 (galaxy10)
+LeJEPA resnet18 (galaxy10)
+LeJEPA resnet34 (galaxy10)
+DINOv2 ViT/s (LVD142M)
+DINOv3 ViT/s (LVD1.7B)
+Figure12.Smallarchitecturein-domain(Galaxy10)LeJEPApretrainingwithlinearprobeevaluationusingfrozenbackboneorfullfinetuning
+(columns) and with varying number of samples per class (x-axis). We compare against state-of-the-art foundation models (DINOv2/v3, ĲEPA) over 3
+different random seeds. We observe thatLeJEPA enables in-domain pretraining out of the box across architectures and able to outperform frontier
+foundation models. Corresponding numbers are provided in Table 3.
+Table 2.Few-shot classification accuracy (percentages) on 8 datasets spanning textures, objects, and fine-grained categories.Our LeJEPA achieves
+superiorperformanceonfine-grainedtasks(DTD,flowers102,food101)whilerequiringonly100pretrainingepochscomparedtoI-JEPA’s300
+epochs—a3×reductionintrainingtimeandcomputationalresourceswithoutsacrificingdownstreamtaskperformance.Thisefficiencygainis
+particularly valuable for practical applications where training budget is limited. Bold indicates best performance within the IN-1K comparison group,
+all numbers are percentages.
+Dataset
+shots model params pretrain epochs DTD aircr. cars cifar10 cifar100 flowers102 food pets avg.
+1LeJEPA ViT-L 304M IN-1K 10033.219.37 3.40 51.65 27.01 48.53 17.14 46.11 29.55
+LeJEPA ConvNeXtV2-H 660M IN-1K 100 32.15 8.07 4.28 50.95 31.4848.74 17.9558.98 31.58
+I-JEPA ViT-H 632M IN-1K 300 27.71 9.86 4.3356.5230.58 44.69 14.53 53.38 30.20
+I-JEPA ViT-H + STOP 632M IN-1K 300 26.6011.18 4.7556.2735.2047.17 15.7559.47 32.05
+I-JEPA ViT-H (22K) 632M IN-22K 900 27.98 13.00 3.45 61.84 34.70 89.72 19.62 30.86 35.15
+10LeJEPA ViT-L 304M IN-1K 10064.7235.25 22.25 85.15 59.7792.53 50.9077.00 60.95
+LeJEPA ConvNeXtV2-H 660M IN-1K 100 61.84 30.67 24.46 85.74 63.29 91.78 49.32 78.53 60.70
+I-JEPA ViT-H 632M IN-1K 300 57.68 33.82 21.96 88.77 66.42 88.24 43.97 83.23 60.51
+I-JEPA ViT-H + STOP 632M IN-1K 300 57.0039.77 25.21 90.09 70.3290.16 45.6885.13 62.92
+I-JEPA ViT-H (22K) 632M IN-22K 900 58.74 43.52 18.27 94.83 75.23 98.94 49.06 67.66 63.28
+allLeJEPA ViT-L 304M IN-1K 10078.3057.01 57.28 96.50 83.7191.21 82.0589.74 79.48
+LeJEPA ConvNeXtV2-H 660M IN-1K 100 76.60 52.99 54.88 96.15 81.34 91.11 77.64 89.76 77.56
+I-JEPA ViT-H 632M IN-1K 300 73.32 56.61 54.47 97.54 86.42 86.47 81.02 92.11 78.50
+I-JEPA ViT-H + STOP 632M IN-1K 300 73.8761.95 61.27 98.02 87.7888.08 81.7292.88 80.70
+I-JEPA ViT-H (22K) 632M IN-22K 900 75.67 65.39 49.79 98.46 89.95 98.54 81.58 87.19 80.82
+Figure 13.EmergentObject Segmentation viaLast Layer Thresholding.LeJEPA naturallylearns to segmentand track salient objects(shown in
+attention maps on the right of each video) without explicit supervision. The results display impressive visual quality and strong temporal consistency
+across video frames (videos provided on our project page). This emergent capability demonstrates the rich semantic representations learned through our
+self-supervised approach.
+16
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA |Sec 6: Experiments
+Figure 14.LeJEPA learns rich semantic representations through
+self-supervised learning.PCA visualization of last-layer features from
+LeJEPA (ViT-Large, 100 epochs on ImageNet-1K). For each image, fea-
+tures are independently projected to RGB using the first 3 principal
+components. Without any supervision, LeJEPA spontaneously develops
+semantically meaningful representations: notice how warm colors (red/-
+magenta/pink)consistentlycaptureforegroundobjects(parrotbodies,
+dogface),whilecoolcolors(cyan/green/yellow)representbackgrounds
+and foliage. This emergent object-background separation and percep-
+tualgroupingdiscoveredthevisualstructure oftheworldpurelyfrom
+unlabeled data.bersome yet necessary [Assran et al., 2022].
+TodemonstrateLeJEPA’sversatilityandabilitytoresolve
+that current pain-point, we propose to pretrain directly
+on a new domain without any change in the loss or the
+pretraining pipeline. We select the Galaxy10 dataset, a
+galaxy morphology classification task that differs signif-
+icantlyfromnaturalimagesinbothvisualstructureand
+statistical properties [Balestriero et al., 2025]. The dataset
+contains 11,000 training samples across 10 galaxy types.
+For LeJEPA, we use the default hyper-parameters and pre-
+trainfor400epochsavarietyofbackbones. Wecompare
+against the latest DINOv2, DINOv3 and ĲEPA. We report
+in Figure 12 the top1 accuracy for linear probing both
+with frozen backbone and full-finetuning. We observe
+thatin-domain pretraining with LeJEPA substantially
+outperformsstate-of-the-artfrontiermodels(DINOv2,
+DINOv3) on both linear probing and full finetuning.
+AdditionaldatasetsandbackbonesareprovidedinTable5
+depicting LeJEPA’s ability to train in-domain, even with
+a dataset with 1000samples (flowers102). Coupling this
+resultwiththestabilityofLeJEPAacrossarchitecturesand
+hyper-parameters should offer a promising alternatives
+in domains not yet accounted for by the latest frontier
+models.
+6.4LeJEPA Scales Across Data and Models
+We now propose to apply LeJEPA over a larger pretrain-
+ingdataset,i.e.,Imagenet-1k,andoverlargerbackbones
+suchasViT/Large(0.3B),ConvNextV2-Huge(0.6B).For
+those two models, we reach an online linear probe accu-
+racy on inet1k of 77.1% and 78.5% respectively. Beyond
+in-distribution performances, we also explore transfer
+learning. Forthoseexperiments,ourbaselinesareĲEPA
+with a ViT-Huge (0.6B) which is the closest to our setup,
+and we also include a recent improved version of ĲEPA
+including additional stochastic prediction tasks [Bar et al.,
+2023] that is coined ĲEPA + STOP. For LeJEPA, we employ
+thesamerecipeasdescribedinSection6.1andreporttrans-
+ferlearningperformanceswithfrozenbackboneinTable2.
+WeobservethatweconsistentlyoutperformĲEPAwhile
+employed a smaller model and shorted training schedule.
+Beyond top1 accuracy, we also echo our findings from
+Section 6.2 about LeJEPA’s training loss quality. In our
+setup, we observe a very stable and smooth training curve
+indicatingastableoptimizationlandscaperemovingthe
+needforcarefulhyperparameterselection(recallthm.4).
+WeprovideanexampleonaViT-gigantic(1.8Bparameters)
+in Figure 1.
+6.5 Emergent Semantic Structure in
+LeJEPA Representations
+A hallmark of successful self-supervised learning is the
+emergenceofsemanticallymeaningfulattentionpatterns
+17
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA | Sec 6: Experiments
+without explicit supervision [Caron et al., 2021]. To as-
+sesswhetherLeJEPAlearnssuchstructure,wevisualize
+the attention maps of the learned representations. Fol-
+lowing DINO [Caron et al., 2021], we apply PCA to the
+embeddings and visualize the first principal components,
+which reveal clear correspondence to object boundaries
+andsalient regions(Figure 14). Furthermore, weexplore
+whether these attention patterns can enable unsupervised
+video segmentation—a challenging task requiring tempo-
+ralconsistencyandobjectunderstanding. Bythresholding
+the self-attention maps of the [CLS] token, we obtain
+binary masks that track objects across frames without
+any segmentation labels during training. As shown in Fig-
+ure13,LeJEPA’sattentionnaturallysegmentsforeground
+objects from background with remarkable temporal co-
+herence, suggesting that the learned representations cap-
+turebothspatialsemanticsandtemporalstructure. This
+emergentcapabilitydemonstratesthatLeJEPA’sstability-
+focused objective does not sacrifice the semantic richness
+of learned features.
+7 Conclusion
+We have established a principled theoretical framework
+for JEPA-based self-supervised learning that fundamen-
+tally resolves its core pathologies. Our contributions span
+theory and practice: we proved that isotropic Gaussian
+embeddingsuniquelyminimizeworst-casedownstream
+risk,introducedSIGRegasatractableandprovablycorrect
+method to enforce this distribution, and demonstrated
+that this approach eliminates representational collapse by
+design–andnotthroughad-hoccombinationsofteacher-
+student networks, stop-gradients, or asymmetric architec-
+tures.
+WevalidateLeJEPAacrossdomainsandover 60archi-
+tectures including gigantic versions with 1.8B parameters.
+In spite of its simplicify , LeJEPA matches state-of-the-art
+performancewhilerequiringfewerthan50linesofcoreim-
+plementation. Critically, our approach provides what SSL
+has long needed: a mathematically rigorous foundation
+that directly informs practical algorithm design.
+Acknowledgments
+WewouldliketothankMikeRabbatandLucasMaesfor
+providing valuable feedbacks on the manuscript.
+References
+HaneenArafatAbuAlfeilat,AhmadBAHassanat,Omar
+Lasassmeh,AhmadSTarawneh,MahmoudBashirAl-
+hasanat, Hamzeh S Eyal Salman, and VB Surya Prasath.
+Effectsofdistancemeasurechoiceonk-nearestneighbor
+classifierperformance: a review.Big data,7(4):221–248,
+2019.Robert A Adams and John JF Fournier.Sobolev spaces,
+volume 140. Elsevier, 2003.
+Kumar K Agrawal, Arnab Kumar Mondal, Arna Ghosh,
+and Blake Richards. a-req: Assessing representation
+quality in self-supervised learning by measuring eigen-
+spectrumdecay.AdvancesinNeuralInformationProcessing
+Systems, 35:17626–17638, 2022.
+TheodoreWAndersonandDonaldADarling. Asymptotic
+theory of certain" goodness of fit" criteria based on
+stochastic processes.The annals of mathematical statistics,
+pages 193–212, 1952.
+Mahmoud Assran, Randall Balestriero, Quentin Duval,
+Florian Bordes, Ishan Misra, Piotr Bojanowski, Pascal
+Vincent,MichaelRabbat,andNicolasBallas. Thehidden
+uniform cluster prior in self-supervised learning.arXiv
+preprint arXiv:2210.07277, 2022.
+MahmoudAssran, QuentinDuval,IshanMisra,PiotrBo-
+janowski, Pascal Vincent, Michael Rabbat, Yann LeCun,
+and Nicolas Ballas. Self-supervised learning from im-
+ages with a joint-embedding predictive architecture. In
+ProceedingsoftheIEEE/CVFConferenceonComputerVision
+and Pattern Recognition, pages 15619–15629, 2023.
+RandallBalestrieroandYannLeCun. Contrastiveandnon-
+contrastiveself-supervised learningrecoverglobal and
+localspectralembeddingmethods.AdvancesinNeural
+Information Processing Systems, 35:26671–26685, 2022.
+RandallBalestrieroandYannLeCun. Learningbyrecon-
+struction produces uninformative features for percep-
+tion.arXiv preprint arXiv:2402.11337, 2024.
+Randall Balestriero, Mark Ibrahim, Vlad Sobal, Ari Mor-
+cos, Shashank Shekhar, Tom Goldstein, Florian Bordes,
+AdrienBardes,GregoireMialon,YuandongTian,etal.
+Acookbookofself-supervisedlearning.arXivpreprint
+arXiv:2304.12210, 2023.
+RandallBalestriero,NicolasBallas,MikeRabbat,andYann
+LeCun. Gaussianembeddings: Howjepassecretlylearn
+your data density.arXiv preprint arXiv:2510.05949, 2025.
+Amir Bar, Florian Bordes, Assaf Shocher, Mahmoud As-
+sran, Pascal Vincent, Nicolas Ballas, Trevor Darrell,
+Amir Globerson, and Yann LeCun. Stochastic posi-
+tional embeddings improve masked image modeling.
+arXiv preprint arXiv:2308.00566, 2023.
+Adrien Bardes, Jean Ponce, and Yann LeCun. Vicreg:
+Variance-invariance-covarianceregularizationforself-
+supervised learning.arXiv preprint arXiv:2105.04906,
+2021.
+18
+
+LeJEPA:
+Sec 1: Intro | Sec 2: Background | Sec 3: Why Gaussian? | Sec 4: SIGReg | Sec 5: LeJEPA | Sec 6: Experiments
+JanBeirlant,EdwardJDudewicz,LászlóGyörfi,EdwardC
+VanderMeulen,etal. Nonparametricentropyestima-
+tion: Anoverview.InternationalJournalofMathematical
+and Statistical Sciences, 6(1):17–39, 1997.
+Chris M Bishop. Training with noise is equivalent to
+tikhonov regularization.Neural computation, 7(1):108–
+116, 1995.
+ChristopherMBishopandNasserMNasrabadi.Pattern
+recognition and machine learning, volume 4. Springer,
+2006.
+Gunnar Blom.Statistical estimates and transformed beta-
+variables. PhD thesis, Almqvist & Wiksell, 1958.
+Nicolas Bonneel, Julien Rabin, Gabriel Peyré, and
+HanspeterPfister. Slicedandradonwassersteinbarycen-
+ters of measures.Journal of Mathematical Imaging and
+Vision, 51(1):22–45, 2015.
+Jane Bromley, Isabelle Guyon, Yann LeCun, Eduard
+Säckinger, and Roopak Shah. Signature verification
+usinga"siamese"timedelayneuralnetwork.Advances
+in neural information processing systems, 6, 1993.
+JeromeSBrunerandLeoPostman. Ontheperceptionof
+incongruity: A paradigm.Journal of personality, 18(2):
+206–223, 1949.
+Russel E Caflisch. Monte carlo and quasi-monte carlo
+methods.Acta numerica, 7:1–49, 1998.
+Torsten Carleman.Les Fonctions quasi analytiques: leçons
+professées au College de France. Gauthier-Villars, 1926.
+Mathilde Caron, Hugo Touvron, Ishan Misra, Hervé Jé-
+gou,JulienMairal,PiotrBojanowski,andArmandJoulin.
+Emergingpropertiesinself-supervisedvisiontransform-
+ers. InProceedingsoftheIEEE/CVFinternationalconference
+on computer vision, pages 9650–9660, 2021.
+Ting Chen, Simon Kornblith, Mohammad Norouzi, and
+Geoffrey Hinton. A simple framework for contrastive
+learningofvisualrepresentations. InInternationalconfer-
+ence on machine learning, pages 1597–1607. PmLR, 2020a.
+Ting Chen, Simon Kornblith, Kevin Swersky, Mohammad
+Norouzi, and Geoffrey E Hinton. Big self-supervised
+modelsarestrongsemi-supervisedlearners.Advances
+inneuralinformationprocessingsystems,33:22243–22255,
+2020b.
+XinleiChen,SainingXie,andKaimingHe. Anempirical
+study of training self-supervised vision transformers.
+InProceedings of the IEEE/CVF international conference on
+computer vision, pages 9640–9649, 2021.Kacper Chwialkowski, Heiko Strathmann, and Arthur
+Gretton. A kernel test of goodness of fit. InInternational
+conferenceonmachinelearning,pages2606–2615.PMLR,
+2016.
+RomainCosentino,AnirvanSengupta,SalmanAvestimehr,
+Mahdi Soltanolkotabi, Antonio Ortega, Ted Willke, and
+MarianoTepper. Towardageometricalunderstanding
+of self-supervised contrastive learning.arXiv preprint
+arXiv:2205.06926, 2022.
+ThomasMCover.Elementsofinformationtheory. JohnWiley
+& Sons, 1999.
+Harald Cramér. On the composition of elementary errors:
+First paper: Mathematical deductions.Scandinavian
+Actuarial Journal, 1928(1):13–74, 1928.
+Harald Cramér and Herman Wold. Some theorems on
+distributionfunctions.JournaloftheLondonMathematical
+Society, 1(4):290–294, 1936.
+Marco Cuturi, Olivier Teboul, and Jean-Philippe Vert. Dif-
+ferentiable ranking and sorting using optimal transport.
+Advancesinneuralinformationprocessingsystems,32,2019.
+Timothée Darcet, Maxime Oquab, Julien Mairal, and Piotr
+Bojanowski. Visiontransformersneedregisters.arXiv
+preprint arXiv:2309.16588, 2023.
+Josef Dick and Friedrich Pillichshammer.Digital nets
+and sequences: discrepancy theory and quasi–Monte Carlo
+integration. Cambridge University Press, 2010.
+Ted Dunning. The t-digest: Efficient estimates of distribu-
+tions.Software Impacts, 7:100049, 2021.
+Ted Dunning and Otmar Ertl. Computing extremely
+accurate quantiles using t-digests.arXiv preprint
+arXiv:1902.04023, 2019.
+Gustav Elfving. The asymptotical distribution ofrange in
+samples from a normal population.Biometrika, 34(1/2):
+111–119, 1947.
+Thomas W Epps and Lawrence B Pulley. A test for nor-
+mality based on the empirical characteristic function.
+Biometrika, 70(3):723–726, 1983.
+AleksandrErmolov,AliaksandrSiarohin,EnverSangineto,
+and Nicu Sebe. Whitening for self-supervised repre-
+sentation learning. InInternational conference on machine
+learning, pages 3015–3024. PMLR, 2021.
+David Fan, Shengbang Tong, Jiachen Zhu, Koustuv Sinha,
+ZhuangLiu,XinleiChen,MichaelRabbat,NicolasBallas,
+YannLeCun,AmirBar,etal.Scalinglanguage-freevisual
+representation learning.arXiv preprint arXiv:2504.01017,
+2025.
+19
+
