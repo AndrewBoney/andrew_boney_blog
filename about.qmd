@@ -15,4 +15,6 @@ about:
       href: https://github.com/AndrewBoney
 ---
 
+[Download my CV](assets/AB_CV.pdf){target="_blank"}
+
 Side projects, paper reviews & experiments
