@@ -6,14 +6,13 @@ about:
   links:
     - icon: twitter
       text: Twitter
-      href: https://twitter.com
+      href: https://x.com/barry_bones_
     - icon: linkedin
       text: LinkedIn
-      href: https://linkedin.com
+      href: https://www.linkedin.com/in/andrew-boney-1a4052155/
     - icon: github
       text: Github
-      href: https://github.com
-
+      href: https://github.com/AndrewBoney
 ---
 
 Side projects, paper reviews & experiments
