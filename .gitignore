@@ -4,4 +4,4 @@
 .Rproj.user
 *.Rproj
 .DS_Store
-.lightning_logs
+lightning_logs/
