@@ -1,0 +1,15 @@
+---
+title: "Portfolio"
+---
+
+Welcome to my portfolio. I’ll add selected projects and case studies here.
+
+# [Survey Scriping Agent](https://github.com/AndrewBoney/survey_scripting_agent)
+
+A proof of concept “survey scripting agent”, that takes a survey specification (either an Excel/CSV template or a free-text description), converts it into a structured survey template, and then deploys the survey to SurveyMonkey.
+
+![](assets/survey_scripting_screenshot.png)
+
+# [Rec (probably to be renamed nanorec)](https://github.com/AndrewBoney/rec)
+
+A project designed at providing a **complete, end-to-end recommendation system**, covering data preparation, training, and deployment in a single, coherent and reproducable repository.
